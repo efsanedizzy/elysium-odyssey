@@ -1,14 +1,15 @@
 # Elysium Odyssey ⚔ — Quest-to-Earn MVP
 
-**A working English-language Web3 quest platform for Kinetiq Elysium Testnet**, developed as an independent community MVP. No cryptocurrency is issued or distributed by this project. No external npm packages or build steps are required.
+**A working English-language Web3 quest platform for Kinetiq Elysium Testnet**, developed as an independent community MVP. No cryptocurrency is issued or distributed by this project. Includes Vercel deployment and durable Postgres storage. See [DEPLOY.md](DEPLOY.md) before publishing.
 
 ## Quick start
 
-**Requirement:** Node.js 20 or newer.
+**Requirement:** Node.js 24. Run `npm ci` first.
 
 ```bash
 # Open the downloaded project folder in your terminal:
 cd elysium-odyssey
+npm ci
 npm start
 ```
 
@@ -20,7 +21,7 @@ For auto-reloading the API while editing:
 npm run dev
 ```
 
-You can also run `node server/index.js`. There is **no `npm install` step** — this app uses only Node.js built-in modules and standard browser APIs.
+You can also run `node server/index.js`. Run `npm ci` to install the locked dependencies. The local server uses JSON storage unless DATABASE_URL is supplied. Vercel requires Postgres.
 
 ### What's inside?
 
@@ -87,6 +88,8 @@ API routes:
 No private keys, transaction signing keys or token contracts are stored server-side.
 
 ## Deploying
+
+For Vercel, follow **[DEPLOY.md](DEPLOY.md)**. API routing, static build and Postgres persistence are configured in this repository.
 
 Deploy to a server with Node.js 20+ and a **persistent filesystem/volume**. Start with `npm start`. Terminate HTTPS at a reverse proxy (e.g. Nginx, Caddy or your hosting platform) and set `NODE_ENV=production` so login cookies are `Secure`.
 

@@ -3,14 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Zero-dependency full-stack Elysium Odyssey quest MVP",
+  "description": "Elysium Odyssey community quest platform with Vercel and Postgres support",
   "scripts": {
     "dev": "node --watch server/index.js",
     "start": "node server/index.js",
     "test": "node --test tests/*.test.js",
-    "check": "node --check server/index.js && node --check server/crypto.js && node --check server/x.js && node --check src/wallet.js && node --check src/main.js && node --check src/constants.js"
+    "check": "node --check server/index.js && node --check server/crypto.js && node --check server/x.js && node --check src/wallet.js && node --check src/main.js && node --check src/constants.js && node --check server/storage.js && node --check api/index.js && node --check scripts/build.js",
+    "build": "node scripts/build.js",
+    "test:postgres": "node tests/postgres.integration.js"
   },
   "engines": {
-    "node": ">=20.12"
+    "node": "24.x"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "embedded-postgres": "^18.6.0-beta.19"
   }
 }

@@ -1,5 +1,7 @@
 import http from 'node:http';
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createStorage } from './storage.js';
 import { existsSync } from 'node:fs';
 import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
@@ -23,25 +25,14 @@ const SESSION_AGE = 7 * 86400000;
 const CHALLENGE_AGE = 5 * 60000;
 const CHAIN_HEX = '0x185d9';
 const PRIVATE_QUIZ_KEY = [2, 1, 0]; // The live answer key stays server-side.
-let store = { users: {}, challenges: {}, sessions: {}, claimedTransactions: {} };
-const xService = createXService({clientId:process.env.X_CLIENT_ID,clientSecret:process.env.X_CLIENT_SECRET,redirectUri:process.env.X_REDIRECT_URI});
+const requestState = new AsyncLocalStorage();
+const storage = createStorage({file:DB});
+const store = new Proxy({}, {get:(_,key)=>requestState.getStore().data[key]});
+const xService = new Proxy({}, {get:(_,key)=>requestState.getStore().x[key]});
 const sessionKey = req => sha256(cookieValue(req,'odyssey_session')||'');
-// Keep the wallet and OAuth callback on one origin.
 const configuredOrigin = process.env.APP_ORIGIN || process.env.X_REDIRECT_URI;
 const appOrigin = configuredOrigin ? new URL(configuredOrigin).origin : null;
-let writing = Promise.resolve();
-try { if (existsSync(DB)) store = { ...store, ...JSON.parse(await readFile(DB,'utf8')) }; }
-catch(err) { console.error('Unable to read the database:',err); process.exit(1); }
-
-function save() {
-  writing = writing.catch(()=>{}).then(async()=>{
-    await mkdir(path.dirname(DB),{recursive:true});
-    const temp = `${DB}.tmp`;
-    await writeFile(temp, JSON.stringify(store,null,2), {mode:0o600});
-    await rename(temp,DB);
-  });
-  return writing;
-}
+// Writes are committed by the request transaction before sending any response.
 const utcDay = () => new Date().toISOString().slice(0,10);
 const token = () => randomBytes(32).toString('hex');
 const sha256 = s => createHash('sha256').update(s).digest('hex');
@@ -69,16 +60,20 @@ function award(u,id,xp,title,daily=false) {
   u.activity=u.activity.slice(-60);
 }
 function json(res,code,body,headers={}) {res.writeHead(code,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff',...headers});res.end(JSON.stringify(body));}
-const rateMap = new Map();
 function throttled(key,max,windowMs) {
-  let r=rateMap.get(key);
-  if(!r||r.until<Date.now())r={count:0,until:Date.now()+windowMs};
-  r.count++;rateMap.set(key,r);
-  if(rateMap.size>20000)rateMap.clear();
+  const limits=store.rateLimits;
+  for(const [k,v] of Object.entries(limits))if(v.until<Date.now())delete limits[k];
+  const r=limits[key]||{count:0,until:Date.now()+windowMs};
+  r.count++;limits[key]=r;
   return r.count>max;
 }
 async function readJSON(req) {
   if(!req.headers['content-type']?.startsWith('application/json')) throw new Error('Expected application/json');
+  if(req.body!==undefined){
+    const raw=typeof req.body==='string'?req.body:JSON.stringify(req.body);
+    if(Buffer.byteLength(raw)>12000)throw new Error('Request is too large');
+    try{return JSON.parse(raw||'{}');}catch{throw new Error('Invalid JSON body');}
+  }
   let data='';
   for await(const c of req) {data+=c; if(data.length>12000)throw new Error('Request is too large');}
   try{return JSON.parse(data||'{}');}catch{throw new Error('Invalid JSON body');}
@@ -108,6 +103,7 @@ async function verifyOnchain(user,hash) {
 async function api(req,res,url) {
   const pathname=url.pathname;
   if(req.method==='GET') {
+    if(pathname==='/api/health')return json(res,200,{ok:true,storage:process.env.DATABASE_URL?'postgres':'local'});
     if(pathname==='/api/config')return json(res,200,{chain:CHAIN,version:'0.1.0',network:'testnet',xEnabled:xService.enabled,socialMode:'linked-click'});
     if(pathname==='/api/x/status') return json(res,200,{enabled:xService.enabled,mode:'linked-click',account:sessionUser(req)?.xAccount||null,appOrigin});
     if(pathname==='/api/x/callback') {
@@ -117,7 +113,7 @@ async function api(req,res,url) {
         const account=await xService.callback(sessionKey(req),u.address,url.searchParams.get('state'),url.searchParams.get('code'));
         if(u.xAccount && u.xAccount.id!==account.id)throw new Error('This wallet is already linked to a different X account.');
         if(Object.values(store.users).some(other=>other.address!==u.address&&other.xAccount?.id===account.id))throw new Error('This X account is already linked to another wallet.');
-        u.xAccount=account;await save();
+        u.xAccount=account;
       }catch(err){xService.forget(sessionKey(req));result=err.message;}
       res.writeHead(303,{location:'/?x='+encodeURIComponent(result),'cache-control':'no-store','referrer-policy':'no-referrer'});res.end();return;
     }
@@ -134,7 +130,7 @@ async function api(req,res,url) {
     catch{return json(res,403,{error:'Invalid origin'});}
   }
   const data=await readJSON(req);
-  const ip=req.socket.remoteAddress||'unknown';
+  const ip=(process.env.VERCEL ? req.headers['x-vercel-forwarded-for']?.split(',')[0]?.trim() : null)||req.socket?.remoteAddress||'unknown';
   if(pathname==='/api/auth/challenge') {
     if(throttled('auth:'+ip,20,10*60000))return json(res,429,{error:'Too many sign-in attempts. Try again later.'});
     if(!isAddress(data.address))return json(res,400,{error:'Enter a valid EVM wallet address.'});
@@ -144,7 +140,7 @@ async function api(req,res,url) {
     const challengeId=token();
     const message=`Elysium Odyssey login\n\nWallet: ${address}\nChain: 99801 (Kinetiq Elysium Testnet)\nNonce: ${challengeId}\nIssued at: ${new Date().toISOString()}\n\nThis is a free login signature, not a transaction or token approval.`;
     store.challenges[challengeId]={address,message,expires:Date.now()+CHALLENGE_AGE};
-    await save();
+
     return json(res,200,{challengeId,message});
   }
   if(pathname==='/api/auth/verify') {
@@ -154,16 +150,16 @@ async function api(req,res,url) {
     delete store.challenges[data.challengeId];
     let recovered='';
     try{recovered=recoverPersonalSign(challenge.message,data.signature).toLowerCase();}catch(e){console.warn('Invalid login signature:',e.message);}
-    if(recovered!==challenge.address){await save();return json(res,401,{error:'The signature does not match your wallet.'});}
+    if(recovered!==challenge.address){return json(res,401,{error:'The signature does not match your wallet.'});}
     let u=store.users[challenge.address];
     if(!u){u={address:challenge.address,xp:0,completions:{},dailyDates:[],joinDate:Date.now(),activity:[]};store.users[challenge.address]=u;award(u,'welcome',120,'The First Spark');}
     const sessionId=token();store.sessions[sha256(sessionId)]={address:challenge.address,expires:Date.now()+SESSION_AGE};
-    await save();
+
     const secure=process.env.NODE_ENV==='production'?'; Secure':'';
     return json(res,200,{user:publicUser(u)},{'set-cookie':`odyssey_session=${sessionId}; HttpOnly; SameSite=Lax; Path=/api; Max-Age=${SESSION_AGE/1000}${secure}`});
   }
   if(pathname==='/api/auth/logout'){
-    xService.forget(sessionKey(req));const value=cookieValue(req,'odyssey_session');if(value)delete store.sessions[sha256(value)];await save();
+    xService.forget(sessionKey(req));const value=cookieValue(req,'odyssey_session');if(value)delete store.sessions[sha256(value)];
     return json(res,200,{ok:true},{'set-cookie':'odyssey_session=; HttpOnly; SameSite=Lax; Path=/api; Max-Age=0'});
   }
   const u=sessionUser(req);
@@ -178,7 +174,7 @@ async function api(req,res,url) {
     u.weeklyClaims[week.key+':'+q.id]=Date.now();
     u.xp+=q.xp;
     u.activity.push({questId:q.id,xp:q.xp,title:q.name,at:Date.now()});u.activity=u.activity.slice(-60);
-    await save();return json(res,200,{user:publicUser(u)});
+    return json(res,200,{user:publicUser(u)});
   }
   if(pathname==='/api/x/connect') {
     if(appOrigin && req.headers.host?.toLowerCase()!==new URL(appOrigin).host.toLowerCase())return json(res,200,{url:appOrigin+'/?x='+encodeURIComponent('Connect your wallet at this address before linking X.')});
@@ -193,7 +189,7 @@ async function api(req,res,url) {
     if(!u.xAccount?.id)return json(res,403,{error:'Connect your X account before claiming this quest.'});
     if(Object.values(store.users).some(other=>other.address!==u.address&&other.xAccount?.id===u.xAccount.id))return json(res,409,{error:'This X account is already linked to another wallet.'});
     award(u,socialQuest.id,socialQuest.xp,socialQuest.name);
-    await save();return json(res,200,{user:publicUser(u),quests:viewQuests(u)});
+    return json(res,200,{user:publicUser(u),quests:viewQuests(u)});
   }
   if(pathname==='/api/quests/transaction/verify') {
     if(u.completions.transaction)return json(res,409,{error:'Onchain quest already completed.'});
@@ -208,7 +204,7 @@ async function api(req,res,url) {
     if(u.completions.transaction || store.claimedTransactions[txHash.toLowerCase()])return json(res,409,{error:'Transaction or quest already claimed.'});
     const q=QUESTS.find(q=>q.id==='transaction');award(u,q.id,q.xp,q.name);
     store.claimedTransactions[txHash.toLowerCase()]=u.address;
-    await save();return json(res,200,{user:publicUser(u),quests:viewQuests(u)});
+    return json(res,200,{user:publicUser(u),quests:viewQuests(u)});
   }
   const m=pathname.match(/^\/api\/quests\/([a-z-]+)\/claim$/);
   if(!m)return json(res,404,{error:'Unknown API route'});
@@ -225,7 +221,7 @@ async function api(req,res,url) {
     if(q.kind==='self'&&data.confirmed!==true)return json(res,400,{error:'Confirm that you explored the testnet explorer.'});
     award(u,q.id,q.xp,q.name);
   }
-  await save();return json(res,200,{user:publicUser(u),quests:viewQuests(u)});
+  return json(res,200,{user:publicUser(u),quests:viewQuests(u)});
 }
 
 const mime={'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8','svg':'image/svg+xml','png':'image/png','jpg':'image/jpeg','ico':'image/x-icon'};
@@ -243,16 +239,29 @@ async function serve(req,res,url) {
     res.end(content);
   }catch{res.writeHead(404);res.end('Not found');}
 }
-const server=http.createServer(async(req,res)=>{
+export default async function handler(req,res){
   try{
     const url=new URL(req.url,'http://localhost');
     // Use one origin before wallet sign-in, so OAuth returns to the cookie's host.
     if(appOrigin && req.method==='GET' && ['/', '/index.html'].includes(url.pathname) && req.headers.host?.toLowerCase()!==new URL(appOrigin).host.toLowerCase()) {
       res.writeHead(302,{location:appOrigin+url.pathname+url.search,'cache-control':'no-store','referrer-policy':'no-referrer'});res.end();return;
     }
-    if(url.pathname.startsWith('/api/'))await api(req,res,url);
+    if(url.pathname.startsWith('/api/')) {
+      const response={status:200,headers:{},body:''};
+      const buffered={writeHead(status,headers={}){response.status=status;response.headers=headers;},end(body=''){response.body=body;}};
+      await storage.transaction(async data=>{
+        const pending=new Map(Object.entries(data.oauthPending));
+        const x=createXService({clientId:process.env.X_CLIENT_ID,clientSecret:process.env.X_CLIENT_SECRET,redirectUri:process.env.X_REDIRECT_URI,pending});
+        await requestState.run({data,x},()=>api(req,buffered,url));
+        data.oauthPending=Object.fromEntries(pending);
+      });
+      res.writeHead(response.status,response.headers);res.end(response.body);
+    }
     else if(req.method==='GET' || req.method==='HEAD')await serve(req,res,url);
     else {res.writeHead(405);res.end('Method not allowed');}
   }catch(e){console.error('Request error:',e);if(!res.headersSent)json(res,e.message?.startsWith('Invalid')||e.message?.startsWith('Expected')||e.message?.includes('too large')?400:500,{error:e.message?.startsWith('Invalid')||e.message?.startsWith('Expected')||e.message?.includes('too large')?e.message:'Server error.'});}
-});
-server.listen(PORT,'0.0.0.0',()=>console.log(`Elysium Odyssey ready at http://localhost:${server.address().port} — chain ${CHAIN.chainId}`));
+}
+if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+  const server=http.createServer(handler);
+  server.listen(PORT,'0.0.0.0',()=>console.log(`Elysium Odyssey ready at http://localhost:${server.address().port} — chain ${CHAIN.chainId}`));
+}

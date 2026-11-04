@@ -1,7 +1,7 @@
 import { randomBytes, createHash } from 'node:crypto';
 
-export function createXService({ clientId, clientSecret, redirectUri, fetchImpl = fetch }) {
-  const pending = new Map(), connections = new Map();
+export function createXService({ clientId, clientSecret, redirectUri, fetchImpl = fetch, pending = new Map() }) {
+  const connections = new Map();
   const enabled = !!(clientId && redirectUri);
   function prune() {
     for (const [key, value] of pending) if (value.expires <= Date.now()) pending.delete(key);
