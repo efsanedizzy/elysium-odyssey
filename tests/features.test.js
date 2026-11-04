@@ -106,8 +106,8 @@ test('HTTP rewards are server-controlled, persistent, and duplicate safe', async
     assert.equal(status.mode,'linked-click');assert.equal(status.enabled,true);assert.equal(status.account,null);
     assert.equal((await claim('x-follow')).status,403,'an unlinked wallet cannot claim');
     const board=await (await fetch(base+'/api/quests')).json();
-    assert.equal(board.quests.length,14);
-    assert.equal(SOCIAL_PROFILES.length,8);
+    assert.equal(board.quests.length,16);
+    assert.equal(SOCIAL_PROFILES.length,10);
     for(const profile of SOCIAL_PROFILES){
       const quest=board.quests.find(q=>q.id===profile.id);
       assert.equal(quest.targetUrl,'https://x.com/'+profile.handle);
@@ -142,15 +142,15 @@ test('HTTP rewards are server-controlled, persistent, and duplicate safe', async
     assert.match(decodeURIComponent(duplicate.headers.get('location')),/already linked to another wallet/);
     const denied=await fetch(base+'/api/quests/x-follow/claim',{method:'POST',headers:{'content-type':'application/json',cookie:'odyssey_session=second-session'},body:'{}'});
     assert.equal(denied.status,403);
-    const meAfter=await (await fetch(base+'/api/me',{headers})).json();assert.equal(meAfter.user.xp,1045);
+    const meAfter=await (await fetch(base+'/api/me',{headers})).json();assert.equal(meAfter.user.xp,1245);
     const weeklyClaim=()=>fetch(base+'/api/weekly/claim',{method:'POST',headers,body:JSON.stringify({id:'weekly-explorer',xp:999999})});
     const weeklyPair=await Promise.all([weeklyClaim(),weeklyClaim()]);
     assert.deepEqual(weeklyPair.map(r=>r.status).sort(),[200,409]);
     const weeklyUser=(await weeklyPair.find(r=>r.status===200).json()).user;
-    assert.equal(weeklyUser.xp,1165);
+    assert.equal(weeklyUser.xp,1365);
     assert.equal(Object.keys(weeklyUser.weeklyClaims).length,1);
     const disk=JSON.parse(await (await import('node:fs/promises')).readFile(db,'utf8'));
-    assert.equal(disk.users[address].xp,1165);
+    assert.equal(disk.users[address].xp,1365);
     assert.deepEqual(disk.users[address].weeklyClaims,weeklyUser.weeklyClaims);
     const premature=await fetch(base+'/api/weekly/claim',{method:'POST',headers:headers2,body:JSON.stringify({id:'weekly-ritual'})});
     assert.equal(premature.status,400);

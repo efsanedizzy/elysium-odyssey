@@ -33,6 +33,14 @@ export function dailyStatus(dates = [], now = new Date()) {
 
 export const SOCIAL_PROFILES = [
   {
+    id: 'follow-hexisnetwork', projectName: 'Hexis Network', handle: 'hexisnetwork',
+    targetUrl: 'https://x.com/hexisnetwork', profileImage: '/public/social-hexisnetwork.jpg'
+  },
+  {
+    id: 'follow-ely-lock', projectName: 'Ely Lock', handle: 'ely_lock',
+    targetUrl: 'https://x.com/ely_lock', profileImage: '/public/social-ely_lock.jpg'
+  },
+  {
     "id": "follow-elysindex",
     "projectName": "ElysIndex",
     "handle": "ElysIndex",
@@ -172,6 +180,6 @@ export function explorerBadges(user = {}) {
     {id:'first',name:'First Spark',description:'Complete your first quest',earned:Object.keys(completed).length>0,icon:'sparkles'},
     {id:'streak',name:'Flame Keeper',description:'Reach a 7-day streak',earned:best>=7,icon:'flame'},
     {id:'onchain',name:'Chain Explorer',description:'Complete the onchain quest',earned:!!completed.transaction,icon:'zap'},
-    {id:'ecosystem',name:'Ecosystem Scout',description:'Complete all 8 ecosystem quests',earned:SOCIAL_PROFILES.every(p=>!!completed[p.id]),icon:'compass'}
+    {id:'ecosystem',name:'Ecosystem Scout',description:`Complete all ${SOCIAL_PROFILES.length} ecosystem quests`,earned:SOCIAL_PROFILES.every(p=>!!completed[p.id]),icon:'compass'}
   ];
 }

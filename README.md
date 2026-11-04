@@ -138,8 +138,8 @@ and check unlinked claims, duplicate X linking and concurrent repeat rewards.
 
 ## Ecosystem follow quests
 
-Eight additional X quests award 100 XP each with mandatory X linking and no
+Ten additional X quests award 100 XP each with mandatory X linking and no
 follow-list verification. Each quest has its own permanent completion ID.
 Images are snapshots downloaded from each supplied public X profile and served
 locally from `public/social-*`; no avatar API runs when visitors load the page.
-Profiles: @ElysIndex, @agora_elysium, @Stockium, @homer_fi, @ElysiumPump, @TheKleos_, @ManteionH, @boxa_elysium.
+Profiles: @ElysIndex, @agora_elysium, @Stockium, @homer_fi, @ElysiumPump, @TheKleos_, @ManteionH, @boxa_elysium, @hexisnetwork, @ely_lock.
